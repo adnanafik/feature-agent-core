@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
+from agent.orchestrator import Orchestrator
 from agent.queue.nats_client import NATSClient
 from agent.state_manager import StateManager
 
@@ -19,11 +20,13 @@ class TaskConsumer:
         self,
         nats_client: NATSClient,
         state_manager: StateManager,
+        orchestrator: Optional[Orchestrator],
         subject: str,
         durable_name: str = "agent-worker",
     ) -> None:
         self._nats = nats_client
         self._state = state_manager
+        self._orchestrator = orchestrator
         self._subject = subject
         self._durable = durable_name
 
@@ -50,8 +53,16 @@ class TaskConsumer:
                 await msg.ack()
                 return
 
-            # Orchestrator dispatch will be wired in Phase 5
-            logger.info("Task %s ready for processing", task_id)
+            if self._orchestrator is None:
+                logger.warning("No orchestrator configured — skipping task %s", task_id)
+                await msg.ack()
+                return
+
+            if action == "resume":
+                await self._orchestrator.resume_after_clarify(task_id)
+            else:
+                await self._orchestrator.run(task_id)
+
             await msg.ack()
 
         except Exception:

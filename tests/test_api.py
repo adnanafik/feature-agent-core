@@ -232,3 +232,100 @@ async def test_stream_404_for_unknown_task(async_client):
     """GET /api/stream/{task_id} returns 404 for non-existent task."""
     response = await async_client.get("/api/stream/nonexist")
     assert response.status_code == 404
+
+
+# --- Phase 5: Clarification API tests ---
+
+async def _create_awaiting_task(async_client):
+    """Helper: create a task and set it to AWAITING_CLARIFICATION."""
+    import agent.main as main_module
+    create_resp = await async_client.post("/api/tasks", json={
+        "task_description": "Clarify test",
+        "target_repo": "owner/repo",
+    })
+    task_id = create_resp.json()["task_id"]
+
+    questions = [
+        {"id": "q1", "question": "Which format?", "options": [
+            {"id": "a", "label": "JSON", "value": "json"},
+            {"id": "b", "label": "XML", "value": "xml"},
+            {"id": "c", "label": "CSV", "value": "csv"},
+            {"id": "other", "label": "Other (type your own)", "value": None},
+        ]}
+    ]
+    await main_module.state_manager.set_clarification_questions(task_id, questions)
+    return task_id
+
+
+@pytest.mark.asyncio
+async def test_clarify_resumes_task(async_client):
+    """POST /api/tasks/{id}/clarify saves answers and returns RESUMED."""
+    task_id = await _create_awaiting_task(async_client)
+
+    response = await async_client.post(f"/api/tasks/{task_id}/clarify", json={
+        "answers": [{
+            "question_id": "q1",
+            "question": "Which format?",
+            "selected_option_id": "a",
+            "selected_option_label": "JSON",
+            "answer": "json",
+        }],
+    })
+    assert response.status_code == 200
+    assert response.json()["status"] == "RESUMED"
+
+
+@pytest.mark.asyncio
+async def test_clarify_rejects_wrong_status(async_client):
+    """POST /api/tasks/{id}/clarify rejects tasks not awaiting clarification."""
+    create_resp = await async_client.post("/api/tasks", json={
+        "task_description": "Not awaiting",
+        "target_repo": "owner/repo",
+    })
+    task_id = create_resp.json()["task_id"]
+
+    response = await async_client.post(f"/api/tasks/{task_id}/clarify", json={
+        "answers": [{"question_id": "q1", "question": "Q?", "selected_option_id": "a",
+                      "selected_option_label": "A", "answer": "a"}],
+    })
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_clarify_validates_answer_count(async_client):
+    """POST /api/tasks/{id}/clarify rejects wrong number of answers."""
+    task_id = await _create_awaiting_task(async_client)
+
+    response = await async_client.post(f"/api/tasks/{task_id}/clarify", json={
+        "answers": [
+            {"question_id": "q1", "question": "Q1?", "selected_option_id": "a",
+             "selected_option_label": "A", "answer": "a"},
+            {"question_id": "q2", "question": "Q2?", "selected_option_id": "b",
+             "selected_option_label": "B", "answer": "b"},
+        ],
+    })
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_clarify_validates_answer_not_empty(async_client):
+    """POST /api/tasks/{id}/clarify rejects empty answers."""
+    task_id = await _create_awaiting_task(async_client)
+
+    response = await async_client.post(f"/api/tasks/{task_id}/clarify", json={
+        "answers": [{"question_id": "q1", "question": "Q?", "selected_option_id": "a",
+                      "selected_option_label": "A", "answer": ""}],
+    })
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_clarify_validates_question_ids_match(async_client):
+    """POST /api/tasks/{id}/clarify rejects unknown question IDs."""
+    task_id = await _create_awaiting_task(async_client)
+
+    response = await async_client.post(f"/api/tasks/{task_id}/clarify", json={
+        "answers": [{"question_id": "q99", "question": "Q?", "selected_option_id": "a",
+                      "selected_option_label": "A", "answer": "a"}],
+    })
+    assert response.status_code == 400
