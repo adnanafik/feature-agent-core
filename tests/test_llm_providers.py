@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from agent.llm.base import LLMError, LLMProvider, LLMResponse, ParseError
 from agent.llm.anthropic_provider import AnthropicProvider
 from agent.llm.bedrock_provider import BedrockProvider
+from agent.llm.registry import PROVIDERS, create_provider
 
 
 # ---------------------------------------------------------------------------
@@ -278,3 +279,33 @@ class TestBedrockProvider:
             result = await provider.call(system="sys", user="usr")
         assert result.content == "bedrock reply"
         assert mock_client.converse.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 4: Provider registry tests
+# ---------------------------------------------------------------------------
+
+class TestProviderRegistry:
+    """Tests for provider registry and create_provider factory."""
+
+    def test_registry_contains_anthropic(self) -> None:
+        assert "anthropic" in PROVIDERS
+        assert PROVIDERS["anthropic"] is AnthropicProvider
+
+    def test_registry_contains_bedrock(self) -> None:
+        assert "bedrock" in PROVIDERS
+        assert PROVIDERS["bedrock"] is BedrockProvider
+
+    def test_create_provider_returns_anthropic(self) -> None:
+        with patch("agent.llm.anthropic_provider.anthropic.Anthropic"):
+            provider = create_provider("anthropic", {"anthropic_api_key": "sk-test"})
+        assert isinstance(provider, AnthropicProvider)
+
+    def test_create_provider_returns_bedrock(self) -> None:
+        with patch("agent.llm.bedrock_provider.boto3.client"):
+            provider = create_provider("bedrock", _BEDROCK_CREDS)
+        assert isinstance(provider, BedrockProvider)
+
+    def test_unknown_type_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown provider type 'openai'"):
+            create_provider("openai", {})
