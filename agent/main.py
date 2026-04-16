@@ -57,9 +57,11 @@ app = FastAPI(
 # Register API routers
 from agent.api.routes.tasks import router as tasks_router  # noqa: E402
 from agent.api.routes.stream import router as stream_router  # noqa: E402
+from agent.api.routes.clarify import router as clarify_router  # noqa: E402
 
 app.include_router(tasks_router)
 app.include_router(stream_router)
+app.include_router(clarify_router)
 
 web_dir = Path(__file__).parent / "web"
 app.mount("/app", StaticFiles(directory=str(web_dir)), name="web")
