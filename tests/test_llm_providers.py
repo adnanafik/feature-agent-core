@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from agent.llm.base import LLMError, LLMProvider, LLMResponse, ParseError
 from agent.llm.anthropic_provider import AnthropicProvider
+from agent.llm.bedrock_provider import BedrockProvider
 
 
 # ---------------------------------------------------------------------------
@@ -178,3 +179,102 @@ class TestAnthropicProvider:
             result = await provider.call(system="sys", user="usr")
         assert result.content == "ok"
         assert mock_client.messages.create.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 3: BedrockProvider tests
+# ---------------------------------------------------------------------------
+
+_BEDROCK_CREDS = {
+    "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+    "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "aws_region": "us-east-1",
+}
+
+
+def _bedrock_converse_response() -> dict:
+    return {
+        "output": {
+            "message": {
+                "content": [{"text": "bedrock reply"}],
+            },
+        },
+        "usage": {
+            "inputTokens": 50,
+            "outputTokens": 25,
+        },
+    }
+
+
+class TestBedrockProvider:
+    """Tests for BedrockProvider."""
+
+    def test_init_from_credentials(self) -> None:
+        with patch("agent.llm.bedrock_provider.boto3.client") as mock_boto:
+            provider = BedrockProvider(credentials=_BEDROCK_CREDS)
+            mock_boto.assert_called_once_with(
+                "bedrock-runtime",
+                aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+                aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                region_name="us-east-1",
+            )
+
+    def test_init_with_session_token(self) -> None:
+        creds = {**_BEDROCK_CREDS, "aws_session_token": "FwoGZX..."}
+        with patch("agent.llm.bedrock_provider.boto3.client") as mock_boto:
+            provider = BedrockProvider(credentials=creds)
+            call_kwargs = mock_boto.call_args
+            assert call_kwargs.kwargs["aws_session_token"] == "FwoGZX..."
+
+    def test_missing_access_key_raises(self) -> None:
+        with pytest.raises(ValueError, match="aws_access_key_id"):
+            BedrockProvider(credentials={})
+
+    def test_missing_secret_key_raises(self) -> None:
+        with pytest.raises(ValueError, match="aws_secret_access_key"):
+            BedrockProvider(credentials={"aws_access_key_id": "x"})
+
+    def test_missing_region_raises(self) -> None:
+        with pytest.raises(ValueError, match="aws_region"):
+            BedrockProvider(credentials={"aws_access_key_id": "x", "aws_secret_access_key": "y"})
+
+    @pytest.mark.asyncio
+    async def test_returns_llm_response(self) -> None:
+        provider = BedrockProvider.__new__(BedrockProvider)
+        mock_client = MagicMock()
+        mock_client.converse.return_value = _bedrock_converse_response()
+        provider._client = mock_client
+
+        result = await provider.call(system="sys", user="usr")
+        assert isinstance(result, LLMResponse)
+        assert result.content == "bedrock reply"
+        assert result.input_tokens == 50
+        assert result.output_tokens == 25
+        assert result.cached_tokens == 0
+        assert result.model == "anthropic.claude-opus-4-5-20250514-v1:0"
+
+    @pytest.mark.asyncio
+    async def test_uses_converse_api_with_correct_params(self) -> None:
+        provider = BedrockProvider.__new__(BedrockProvider)
+        mock_client = MagicMock()
+        mock_client.converse.return_value = _bedrock_converse_response()
+        provider._client = mock_client
+
+        await provider.call(system="sys", user="usr")
+        call_kwargs = mock_client.converse.call_args.kwargs
+        assert call_kwargs["modelId"] == "anthropic.claude-opus-4-5-20250514-v1:0"
+        assert call_kwargs["inferenceConfig"]["temperature"] == 0.0
+        assert call_kwargs["inferenceConfig"]["topP"] == 1.0
+        assert call_kwargs["inferenceConfig"]["maxTokens"] == 4096
+
+    @pytest.mark.asyncio
+    async def test_retries_on_error(self) -> None:
+        provider = BedrockProvider.__new__(BedrockProvider)
+        mock_client = MagicMock()
+        mock_client.converse.side_effect = [Exception("throttled"), _bedrock_converse_response()]
+        provider._client = mock_client
+
+        with patch("agent.llm.bedrock_provider.asyncio.sleep", new_callable=AsyncMock):
+            result = await provider.call(system="sys", user="usr")
+        assert result.content == "bedrock reply"
+        assert mock_client.converse.call_count == 2
