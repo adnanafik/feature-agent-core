@@ -9,7 +9,7 @@ import pytest
 
 from agent.benchmark import BenchmarkTracker
 from agent.event_emitter import EventEmitter
-from agent.llm_client import LLMClient, LLMResponse
+from agent.llm import LLMProvider, LLMResponse
 from agent.skills.clarifier import ClarifierSkill
 from agent.skills.code_writer import CodeWriterSkill
 from agent.skills.issue_reader import IssueReaderSkill
@@ -21,7 +21,7 @@ from agent.storage.local_volume import LocalVolumeStorage
 @pytest.fixture
 def llm():
     """Mock LLM client."""
-    mock = MagicMock(spec=LLMClient)
+    mock = MagicMock(spec=LLMProvider)
     mock.call = AsyncMock()
     mock.parse_json = AsyncMock()
     return mock
@@ -252,9 +252,12 @@ async def test_code_writer_includes_test_failure_on_retry(llm, benchmark, emitte
         llm, benchmark, emitter,
     )
 
-    # Verify the call included test failure in the prompt
+    # Verify the call included test failure context on retry
     call_args = llm.call.call_args
-    assert "Previous attempt failed tests" in call_args.kwargs.get("user", call_args.args[1] if len(call_args.args) > 1 else "")
+    user_prompt = call_args.kwargs.get("user", call_args.args[1] if len(call_args.args) > 1 else "")
+    assert "Tests reported" in user_prompt
+    assert "FAILED test_something - AssertionError" in user_prompt
+    assert "ITERATE" in user_prompt
 
 
 # --- TestWriterSkill ---

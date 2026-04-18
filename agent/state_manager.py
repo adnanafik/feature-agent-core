@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import secrets
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, List, Optional
@@ -21,6 +20,7 @@ class TaskState(str, Enum):
     AWAITING_CLARIFICATION = "AWAITING_CLARIFICATION"
     DONE = "DONE"
     FAILED = "FAILED"
+    CANCELED = "CANCELED"
 
 
 class StateManager:
@@ -40,13 +40,17 @@ class StateManager:
 
     async def create_task(
         self,
+        task_id: str,
         source: str,
         github_issue_url: Optional[str],
         task_description: Optional[str],
         target_repo: str,
+        provider: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Create a new task with PENDING status."""
-        task_id = secrets.token_hex(4)
+        existing = await self.get_task(task_id)
+        if existing is not None:
+            raise ValueError(f"Task {task_id} already exists")
         now = self._now_iso()
         task = {
             "task_id": task_id,
@@ -57,6 +61,7 @@ class StateManager:
             "github_issue_url": github_issue_url,
             "task_description": task_description,
             "target_repo": target_repo,
+            "provider": provider or {},
             "requirement": None,
             "clarification": None,
             "context": {},
@@ -93,6 +98,13 @@ class StateManager:
                     tasks.append(task)
         tasks.sort(key=lambda t: t.get("created_at", ""), reverse=True)
         return tasks
+
+    async def delete_task(self, task_id: str) -> None:
+        """Remove all per-task artifacts: state, event log, and benchmark."""
+        await self._storage.delete(self._task_key(task_id))
+        await self._storage.delete(self._events_key(task_id))
+        await self._storage.delete(f"tasks/{task_id}/benchmark")
+        logger.info("Deleted task %s", task_id)
 
     async def append_event(self, task_id: str, event: dict[str, Any]) -> None:
         """Append an event to the task's event log."""

@@ -12,6 +12,7 @@ from agent.api.models import (
     TaskListResponse,
     TaskResponse,
 )
+from agent.state_manager import TaskState
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,17 @@ async def create_task(request: TaskCreateRequest) -> TaskCreateResponse:
     state_manager, nats_client, settings = _get_deps()
 
     source = "github_issue" if request.github_issue_url else "free_text"
-    task = await state_manager.create_task(
-        source=source,
-        github_issue_url=request.github_issue_url,
-        task_description=request.task_description,
-        target_repo=request.target_repo,
-    )
+    try:
+        task = await state_manager.create_task(
+            task_id=request.task_id,
+            source=source,
+            github_issue_url=request.github_issue_url,
+            task_description=request.task_description,
+            target_repo=request.target_repo,
+            provider=request.provider.model_dump(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
     try:
         await nats_client.publish(
@@ -53,13 +59,19 @@ async def create_task(request: TaskCreateRequest) -> TaskCreateResponse:
     )
 
 
+def _strip_provider(task: dict) -> dict:
+    """Remove provider credentials before returning to client."""
+    t = {k: v for k, v in task.items() if k != "provider"}
+    return t
+
+
 @router.get("", response_model=TaskListResponse)
 async def list_tasks() -> TaskListResponse:
     """List all tasks."""
     state_manager, _, _ = _get_deps()
     tasks = await state_manager.list_tasks()
     return TaskListResponse(
-        tasks=[TaskResponse(**t) for t in tasks],
+        tasks=[TaskResponse(**_strip_provider(t)) for t in tasks],
         total=len(tasks),
     )
 
@@ -71,4 +83,22 @@ async def get_task(task_id: str) -> TaskResponse:
     task = await state_manager.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-    return TaskResponse(**task)
+    return TaskResponse(**_strip_provider(task))
+
+
+TERMINAL_STATES = {TaskState.DONE.value, TaskState.FAILED.value, TaskState.CANCELED.value}
+
+
+@router.delete("/{task_id}")
+async def delete_or_cancel_task(task_id: str) -> dict:
+    """DELETE semantics: if the task is running, mark CANCELED; if terminal, remove."""
+    state_manager, _, _ = _get_deps()
+    task = await state_manager.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    if task["status"] in TERMINAL_STATES:
+        await state_manager.delete_task(task_id)
+        return {"task_id": task_id, "action": "deleted"}
+    await state_manager.update_task(task_id, status=TaskState.CANCELED.value)
+    logger.info("Task %s marked for cancellation", task_id)
+    return {"task_id": task_id, "action": "canceled"}
