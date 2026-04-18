@@ -163,3 +163,7 @@ For higher throughput see the v2 architecture discussion at the end of the cours
 ```bash
 pytest tests/ -v --cov=agent
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
