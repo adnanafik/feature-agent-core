@@ -61,6 +61,7 @@ class SkillBenchmark(BaseModel):
     estimated_cost_usd: float
     status: str
     retry_count: int
+    models_used: List[str] = []  # unique LLM model IDs called by this skill
 
 
 class TaskBenchmark(BaseModel):
@@ -148,6 +149,7 @@ class BenchmarkTracker:
             ),
             status=status,
             retry_count=retry_count,
+            models_used=sorted({c.model for c in llm_calls}),
         ))
         logger.debug("Benchmark: ended %s (%dms, %s)", skill_name, elapsed_ms, status)
 

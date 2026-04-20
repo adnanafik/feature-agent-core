@@ -111,6 +111,7 @@ class SkillBenchmarkEvent(BaseModel):
     cost_usd: float
     status: str
     retry_count: int
+    models_used: List[str] = []
 
 
 class ErrorResponse(BaseModel):

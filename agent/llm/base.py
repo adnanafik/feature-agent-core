@@ -54,8 +54,15 @@ class LLMProvider(ABC):
         self,
         response_text: str,
         correction_context: str = "",
+        max_tokens: int = 4096,
+        model: str | None = None,
     ) -> dict[str, Any]:
-        """Parse JSON from response, retrying with correction prompt on failure."""
+        """Parse JSON from response, retrying with correction prompt on failure.
+
+        `max_tokens` and `model` should match (or exceed) the original call's
+        settings — the correction has to re-emit the full payload, so a small
+        budget will silently truncate large outputs and re-fail.
+        """
         cleaned = self._strip_markdown_fences(response_text)
         try:
             return json.loads(cleaned)
@@ -69,8 +76,8 @@ class LLMProvider(ABC):
                 system="You are a JSON correction assistant. Return ONLY valid JSON with no explanation, no markdown, no code fences.",
                 user=f"Your previous response was not valid JSON. Return ONLY the JSON object with no explanation, no markdown, no code fences.\n\nPrevious response:\n{response_text}\n\n{correction_context}",
                 use_cache=False,
-                max_tokens=2048,
-                model="fast",
+                max_tokens=max_tokens,
+                model=model,
             )
             cleaned = self._strip_markdown_fences(correction.content)
             return json.loads(cleaned)

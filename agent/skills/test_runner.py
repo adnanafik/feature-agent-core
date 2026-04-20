@@ -67,11 +67,9 @@ class TestRunnerSkill(Skill):
                     "test_results": {
                         "passed": False,
                         "output": (
-                            f"Edit could not be applied: {exc}\n"
-                            "The old_string in one of your edits did not match the "
-                            "current file content. Re-check which file actually contains "
-                            "the failing assertion, and provide an old_string that exists "
-                            "verbatim in that file."
+                            f"File change could not be applied: {exc}\n"
+                            "Each entry in file_changes must include both `path` and "
+                            "`new_content` (the complete final file)."
                         ),
                         "passed_count": 0,
                         "total_tests": 0,

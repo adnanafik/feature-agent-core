@@ -15,7 +15,7 @@ from agent.storage.interface import StorageInterface
 
 logger = logging.getLogger(__name__)
 
-MAX_TEST_RETRIES = 4
+MAX_TEST_RETRIES = 2
 
 
 class TaskCanceled(Exception):

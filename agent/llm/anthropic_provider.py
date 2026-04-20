@@ -13,15 +13,15 @@ from agent.llm.base import LLMError, LLMProvider, LLMResponse
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-sonnet-4-5-20250514"
+DEFAULT_MODEL = "claude-sonnet-4-6"
 RETRY_DELAY_SECONDS = 2.0
 
 # Model aliases — skills request a tier, provider maps to a concrete model.
 # "fast" = cheapest for simple tasks, "default" = balanced, "powerful" = best reasoning.
 MODEL_ALIASES: dict[str, str] = {
     "fast": "claude-haiku-4-5-20251001",
-    "default": "claude-sonnet-4-5-20250514",
-    "powerful": "claude-sonnet-4-5-20250514",
+    "default": "claude-sonnet-4-6",
+    "powerful": "claude-opus-4-7",
 }
 
 

@@ -21,38 +21,18 @@ CRITICAL SCOPE RULES:
 - Reference files are provided for style and pattern matching ONLY — do not include them in file_changes unless the feature requires editing them.
 - Never reformat, re-indent, re-order imports, or rename symbols in files that don't functionally need changes for this feature.
 
-OUTPUT FORMAT — two operations:
+OUTPUT FORMAT:
+For each file you create or modify, return the COMPLETE new file content in `new_content`. There is no partial-edit mode — always emit the full final file.
 
-1. For NEW files that don't exist yet, use `operation: "create"` with full file content:
-   {
-     "path": "app/migrations/versions/002_add_due_date.py",
-     "operation": "create",
-     "new_content": "...complete file content...",
-     "change_summary": "one sentence"
-   }
+{
+  "path": "app/models/task.py",
+  "new_content": "...complete file content...",
+  "change_summary": "one sentence"
+}
 
-2. For EXISTING files, use `operation: "edit"` with targeted string replacements:
-   {
-     "path": "app/models/task.py",
-     "operation": "edit",
-     "edits": [
-       {
-         "old_string": "    status: Mapped[str] = mapped_column(String(50), default=\"todo\", nullable=False)",
-         "new_string": "    status: Mapped[str] = mapped_column(String(50), default=\"todo\", nullable=False)\n    due_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)"
-       }
-     ],
-     "change_summary": "one sentence"
-   }
-
-CRITICAL RULES FOR EDITS:
-- `old_string` must be EXACTLY as it appears in the original file (whitespace, indentation, and surrounding context included).
-- Include enough surrounding context that `old_string` is UNIQUE in the file.
-- NEVER use `operation: "edit"` for a file that doesn't exist — use `create`.
-- NEVER use `operation: "create"` for a file that already exists — use `edit` to avoid dropping unrelated content.
-- Shared files like `conftest.py`, `__init__.py`, registries, and helpers MUST always use `edit` — dropping existing fixtures or helpers is a critical bug.
-- You may include multiple edits per file; they are applied in order.
-
-General rules:
+CRITICAL RULES:
+- For files that ALREADY EXIST, `new_content` MUST contain the entire existing file with your changes merged in. Anything you omit will be deleted from the file.
+- Shared files like `conftest.py`, `__init__.py`, registries, and helpers are especially dangerous — preserve every existing fixture, helper, import, and unrelated definition.
 - Follow existing code style and patterns exactly.
 - Never add comments that were not in the original.
 - Include an Alembic migration ONLY if the model schema actually changes.
@@ -98,50 +78,64 @@ class CodeWriterSkill(Skill):
                 for a in answers:
                     qa_pairs += f"Q: {a.get('question', '')}\nA: {a.get('answer', '')}\n\n"
 
+            # Always send the full original codebase context (relevant files +
+            # architecture). Trimming this on retry causes the model to hallucinate
+            # imports and break things further.
+            relevant_files_str = ""
+            for f in codebase.get("relevant_files", []):
+                relevant_files_str += f"\n--- {f['path']} ---\n{f['content']}\n"
+
+            base_prompt = (
+                f"Implement this feature:\n"
+                f"Title: {requirement.get('title', '')}\n"
+                f"Requirements: {requirement.get('requirements', [])}\n"
+                f"Acceptance criteria: {requirement.get('acceptance_criteria', [])}\n\n"
+                f"Clarifications (user answers — these are part of the spec):\n{qa_pairs}\n"
+                f"Codebase architecture:\n{codebase.get('architecture_summary', '')}\n\n"
+                f"Relevant files (current state on disk):\n{relevant_files_str}\n"
+            )
+
             if iteration > 0 and test_failure:
-                # Retry: send only prior changes + test failure, not full file contents again.
-                # The LLM already saw the codebase on the first call.
+                # On retry, also include the full content of files we previously
+                # wrote, so the model can repair from a known baseline instead of
+                # guessing at imports/structure.
                 prior_changes = context.get("code_changes", [])
-                prior_summary = "\n".join(
-                    f"- {c.get('path', '')} [{c.get('operation', 'create')}]: {c.get('change_summary', '')}"
-                    for c in prior_changes
-                )
+                prior_full = ""
+                for c in prior_changes:
+                    prior_full += (
+                        f"\n--- {c.get('path', '')} (your previous attempt) ---\n"
+                        f"{c.get('new_content', '')}\n"
+                    )
                 user_prompt = (
-                    f"Feature: {requirement.get('title', '')}\n"
-                    f"Requirements: {requirement.get('requirements', [])}\n"
-                    f"Acceptance criteria: {requirement.get('acceptance_criteria', [])}\n\n"
-                    f"Codebase architecture:\n{codebase.get('architecture_summary', '')}\n\n"
-                    f"Your PREVIOUS attempt touched these files (already applied, then tests ran):\n"
-                    f"{prior_summary}\n\n"
+                    base_prompt
+                    + f"\nYour PREVIOUS attempt wrote these files (they were applied, "
+                    f"then tests ran):\n{prior_full}\n"
                     f"Tests reported:\n{test_failure}\n\n"
-                    "ITERATE: return a NEW file_changes list that keeps your prior fixes intact and "
-                    "only adjusts what's needed to make the failing tests pass. Do NOT revert fixes "
-                    "that weren't related to the failure.\n"
-                    "NOT NULL / required-column errors are almost always fixture-level — include "
-                    "the fixture file in edits if so.\n"
+                    "ITERATE: return a NEW file_changes list that keeps your prior "
+                    "fixes intact and only adjusts what's needed to make the failing "
+                    "tests pass. Do NOT revert fixes that weren't related to the "
+                    "failure. Verify imports against the actual files shown above — "
+                    "do not guess module paths.\n"
+                    "NOT NULL / required-column errors are almost always fixture-level "
+                    "— include the fixture file in edits if so.\n"
                     "\nReturn complete file contents. JSON only."
                 )
             else:
-                # First attempt: send full codebase context
-                relevant_files_str = ""
-                for f in codebase.get("relevant_files", []):
-                    relevant_files_str += f"\n--- {f['path']} ---\n{f['content']}\n"
+                user_prompt = base_prompt + "\nReturn complete file contents. JSON only."
 
-                user_prompt = (
-                    f"Implement this feature:\n"
-                    f"Title: {requirement.get('title', '')}\n"
-                    f"Requirements: {requirement.get('requirements', [])}\n"
-                    f"Acceptance criteria: {requirement.get('acceptance_criteria', [])}\n\n"
-                    f"Clarifications:\n{qa_pairs}\n"
-                    f"Codebase architecture:\n{codebase.get('architecture_summary', '')}\n\n"
-                    f"Relevant files:\n{relevant_files_str}\n"
-                    "\nReturn complete file contents. JSON only."
-                )
-
-            response = await llm.call(system=SYSTEM_PROMPT, user=user_prompt, max_tokens=8192)
+            response = await llm.call(
+                system=SYSTEM_PROMPT,
+                user=user_prompt,
+                max_tokens=8192,
+                model="powerful",
+            )
             benchmark.record_llm_call(self.name, response, "Write code changes")
 
-            result = await llm.parse_json(response.content)
+            # Match correction budget to the original call — full-file outputs
+            # are large, and a smaller budget would silently truncate the retry.
+            result = await llm.parse_json(
+                response.content, max_tokens=8192, model="powerful"
+            )
 
             code_changes = result.get("file_changes", [])
             files_to_modify = set(result.get("files_to_modify", []))

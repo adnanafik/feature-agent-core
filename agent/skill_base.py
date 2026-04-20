@@ -74,6 +74,7 @@ class Skill(ABC):
                 output_tokens=current.output_tokens,
                 cached_tokens=current.cached_tokens,
                 cost_usd=current.estimated_cost_usd,
+                models_used=current.models_used,
             )
 
     async def _emit_progress(
