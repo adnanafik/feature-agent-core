@@ -13,7 +13,7 @@ Built for the "Building Agentic AI Systems" course by Adnan Khan.
 3. Clones and explores the target codebase
 4. Writes code changes following existing patterns
 5. Writes comprehensive tests
-6. Runs tests — retries if they fail (max 4x)
+6. Runs tests — retries once if they fail (max 2 attempts total)
 7. Opens a GitHub PR with full context
 8. Streams every step to the client in real time
 
@@ -43,6 +43,11 @@ A simple language detector runs first (inspect the cloned repo for `pom.xml`, `*
 - Claude API key (console.anthropic.com)
 - GitHub account + personal access token
 
+> Note: Your Claude key and GitHub PAT will be configured in
+> `feature-agent-client/config.local.js`, **not** in this repo's `.env`.
+> Credentials never live on the agent server — each request from the
+> browser carries the keys. See the client repo for setup details.
+
 ## Setup
 
 1. Clone this repo
@@ -61,18 +66,36 @@ A simple language detector runs first (inspect the cloned repo for `pom.xml`, `*
    ```bash
    cp .env.example .env
    ```
-   Edit .env with your API keys and GitHub repo
+   No edits needed for local dev — the defaults work. API keys are
+   **not** stored here. Credentials live in
+   `feature-agent-client/config.local.js` and travel with each feature
+   request from the browser. See the client repo for key setup.
 
 4. Start the system
    ```bash
    docker compose up
    ```
 
-5. Open the API docs
-   http://localhost:8000/docs
+5. Open the API docs at http://localhost:8000/docs
+   This is the agent's FastAPI swagger UI — useful for exploring
+   endpoints, but you won't usually use it directly.
 
-For the web client UI:
-See feature-agent-client repo.
+6. Start the web client (separate repo)
+   The agent is now running but has no UI. See
+   [feature-agent-client](https://github.com/feature-agent/feature-agent-client)
+   for the web dashboard. The client is its own docker compose stack
+   on port 8080. Start it after the agent is up.
+
+## Cost
+
+This agent uses the Claude API. There is no free tier.
+
+- A typical end-to-end run costs about **$0.80 to $1.00**
+- Working through every demo and exercise: **$10–$15 total**
+- Credit card required at console.anthropic.com
+
+The system itself is free — no AWS, no Kubernetes, no managed
+services. Everything runs locally with Docker.
 
 ## Architecture
 
@@ -126,7 +149,7 @@ See feature-agent-client repo.
 │                                                │              │
 │                                    ┌───── PASS?──────┐        │
 │                                    │ yes          no │        │
-│                                    ▼     (retry 2x)  │        │
+│                                    ▼     (retry 1x)  │        │
 │                              ┌───────────┐    ▲      │        │
 │                              │ PRCreator │    │      │        │
 │                              │ (skill 7) │    └──────┘        │
@@ -153,16 +176,17 @@ See [CLAUDE.md](CLAUDE.md) for full architecture documentation.
 
 The agent routes each skill to the smallest-capable model and limits how much context each call has to carry. Concretely:
 
-- **Model tiering.** Providers expose three aliases: `fast` (Haiku 4.5), `default` (Sonnet 4.5), `powerful` (Sonnet 4.5, reserved for a future Opus swap). Skills pick a tier per call.
+- **Model tiering.** Providers expose three aliases: `fast` (Haiku 4.5), `default` (Sonnet 4.6), `powerful` (Opus 4.7). Skills pick a tier per call.
   - `issue_reader` and `clarifier` run on `fast` — short structured-JSON tasks.
-  - `code_writer` and `test_writer` run on `default` with `max_tokens=8192`.
+  - `codebase_explorer` runs on `default` — reads files and reasons about architecture.
+  - `code_writer` and `test_writer` run on `powerful` with `max_tokens=8192` — heavy generation work.
   - The JSON self-correction retry in `LLMProvider.parse_json` runs on `fast`.
 - **Per-model pricing.** `agent/benchmark.py` carries rates for Sonnet, Haiku, and Opus families. Each LLM call is costed using the model actually used; totals are summed per-call rather than via a single flat rate.
 - **Token budgets.** `codebase_explorer` caps compressed file contents at ~32KB (≈8K tokens) before prompting the LLM, stopping early once the budget is reached.
 - **Tight retry prompts.** When `code_writer` retries after a test failure, it sends only the prior change summary and the test output — the full codebase context is not re-sent, since the model already saw it on the first attempt.
 - **Per-call `max_tokens`.** `LLMProvider.call` takes a `max_tokens` argument so each skill requests only what it needs instead of a blanket 16K ceiling.
 
-Net effect: the cheap, repetitive skills run on Haiku, the generation-heavy skills stay on Sonnet, retries don't duplicate context, and benchmark numbers reflect the real per-model cost.
+Net effect: the cheap, repetitive skills run on Haiku, the codebase analysis runs on Sonnet, the generation-heavy skills run on Opus, retries don't duplicate context, and benchmark numbers reflect the real per-model cost.
 
 ## Scaling Limitations
 
